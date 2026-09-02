@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
 
     sleep_no_wake(8);
 
-    int fd =  open("./rdt_send_file.txt",O_RDWR);
+    int fd =  open("/vagrant/tju_tcp/test/rdt_send_file.txt",O_RDWR);
     if(-1 == fd) {
         return 1;
     }

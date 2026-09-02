@@ -8,13 +8,14 @@
 #define MAXSIZE 50*MIN_LEN*MIN_LEN
 
 int t_times = 5000;
+// int t_times = 50;
 char allbuf[MAXSIZE] = {'\0'}; //设置全局变量
 
 void fflushbeforeexit(int signo){
     printf("意外退出server\n");
 
     FILE *wfile;
-    wfile = fopen("./rdt_recv_file.txt","w");
+    wfile = fopen("/vagrant/tju_tcp/test/rdt_recv_file.txt","w");
     if(wfile == NULL){
         printf("Error opening file\n");
         return;
@@ -80,7 +81,7 @@ int main(int argc, char **argv) {
     }
 
     FILE *wfile;
-    wfile = fopen("./rdt_recv_file.txt","w");
+    wfile = fopen("/vagrant/tju_tcp/test/rdt_recv_file.txt","w");
     if(wfile == NULL){
         printf("Error opening file\n");
         return -1;
