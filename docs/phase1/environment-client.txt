@@ -1,0 +1,22 @@
+﻿=== hostname ===
+client
+=== uname ===
+Linux client 5.4.0-80-generic #90-Ubuntu SMP Fri Jul 9 22:49:44 UTC 2021 x86_64 x86_64 x86_64 GNU/Linux
+=== address ===
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+enp0s3           UP             10.0.2.15/24 fd17:625c:f037:2:30:6ff:fee0:ff78/64 fe80::30:6ff:fee0:ff78/64 
+enp0s8           UP             172.17.0.2/16 fe80::a00:27ff:fea7:feb1/64 
+=== route ===
+172.17.0.3 dev enp0s8 src 172.17.0.2 uid 1000 
+    cache 
+=== compiler ===
+gcc (Ubuntu 9.3.0-17ubuntu1~20.04) 9.3.0
+=== make ===
+GNU Make 4.2.1
+=== git ===
+git version 2.25.1
+=== python ===
+Python 3.8.10
+=== tools ===
+/usr/local/bin/tcset
+/usr/sbin/tcpdump
