@@ -18,7 +18,7 @@
 | `architecture.md` | 源码架构和调用关系分析 | 源码核对与运行验证 |
 | `requirements-traceability.md` | 课程要求、设计、测试和状态追踪 | 指导书与源码核对 |
 | `design-v1.md` | 协议总体设计和后续实现测试计划 | 第一阶段设计版本 |
-| `ai-validation-log.md` | AI 协作与人工核验记录模板 | 人工填写/更新 |
+| `review-notes.md` | 关键结论的人工复核摘要 | 第一阶段复核记录 |
 | `unresolved-issues.md` | 基线缺陷、范围裁剪和第二阶段待办 | 源码与测试发现 |
 
 ## 基线配置
@@ -36,4 +36,3 @@
 - pcap 捕获 4 个 UDP 报文，`4 packets received by filter`、`0 packets dropped by kernel`。
 - 基线 qdisc 的 ping 结果约为 40 ms RTT；原始测量值见 `network-client.txt` 和 `network-server.txt`。
 - 当前 `src/` 是教学基线骨架；本阶段只记录其行为，不把未实现的 TCP 机制写成已完成。
-

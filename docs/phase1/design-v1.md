@@ -2,7 +2,7 @@
 
 ## 1. 范围和目标
 
-TJU_TCP 是承载在 UDP `20218` 上的课程自定义传输协议，不与互联网标准 TCP 互操作。本设计覆盖第二阶段的连接管理、可靠数据传输和流量控制，以及第三阶段的基础 Reno；高级 Reno、NewReno、SACK/RACK、CUBIC 留作独立挑战分支。
+TJU_TCP 是承载在 UDP `20218` 上的课程自定义传输协议，不与互联网标准 TCP 互操作。本设计覆盖第二阶段的连接管理、可靠数据传输和流量控制，以及第三阶段的基础 Reno；基础 Reno 通过后按依赖顺序实现完整 Reno、NewReno、SACK/6675、RACK-TLP 和 CUBIC 五项挑战。
 
 ## 2. 模块划分
 
@@ -12,7 +12,7 @@ TJU_TCP 是承载在 UDP `20218` 上的课程自定义传输协议，不与互�
 | TCP 控制块 | 状态、地址、缓冲区、计时器和窗口 | `tju_tcp_t` |
 | 连接管理 | bind/listen/accept/connect/close 和状态机 | `tju_tcp.c` |
 | 可靠传输 | 分段、序号、ACK、重传和重组 | `tju_tcp.c` |
-| 流量/拥塞控制 | `rwnd`、`cwnd`、`ssthresh`、零窗口探测 | `tju_tcp.c` |
+| 流量/拥塞控制 | `rwnd`、`cwnd`、`ssthresh`、零窗口探测、Reno/NewReno/SACK/RACK-TLP/CUBIC | `tju_tcp.c` |
 | 报文编码 | 网络字节序、头部、payload、checksum | `tju_packet.c` |
 | UDP 模拟内核 | 20218 收发、线程和 socket 查找 | `kernel.c` |
 
@@ -46,7 +46,7 @@ ESTABLISHED --peer FIN--> CLOSE_WAIT --close/FIN--> LAST_ACK --> CLOSED
 
 每条连接维护 `SRTT`、`RTTVAR`、`RTO` 和针对最早未确认段的定时器。初始 RTO 按说明书；第一个样本 `R` 使用 `SRTT=R`、`RTTVAR=R/2`、`RTO=SRTT+max(G,4×RTTVAR)`；后续先更新 RTTVAR，再更新 SRTT。重传过的报文不作为 RTT 样本。超时后重传最早未确认段并指数退避，ACK 推进时重启定时器，全部确认后停止。
 
-## 7. 流量控制和基础 Reno
+## 7. 流量控制、基础 Reno 和挑战接口
 
 接收端通告 `rwnd=min(可用空间,65535)`（未实现窗口扩展时）。发送端第二阶段允许的在途字节数受 `rwnd` 限制；第三阶段使用：
 
@@ -56,6 +56,8 @@ FlightSize = 已发送但尚未累计确认的数据字节数
 ```
 
 基础 Reno 变量以字节为单位：`cwnd`、`ssthresh`、`FlightSize`。慢启动阶段每个新数据 ACK 增加不超过一个 SMSS；拥塞避免阶段每 RTT 增长约一个 SMSS；RTO 或三次重复 ACK 时设置 `ssthresh=max(FlightSize/2,2×SMSS)` 并降低 `cwnd`，然后重新慢启动或按基础 Reno规则进入拥塞避免。
+
+基础 Reno 冻结后，挑战按以下顺序实现：完整 Reno 依据 RFC 5681 §3.2 进行窗口膨胀和恢复 ACK 收缩；NewReno 依据 RFC 6582 §3.2 处理部分确认；SACK 依据 RFC 2018 §2–§5 协商、编码和解释选项，并依据 RFC 6675 §3–§5 维护记分板和选择重传段；RACK-TLP 依据 RFC 8985 §3、§6–§8 使用逐报文发送时间进行丢包检测和尾部探测；CUBIC 依据 RFC 9438 §3–§4 实现窗口函数、快速收敛和乘性降低。每项挑战使用独立开关、分支和 trace，且必须通过基础 Reno 回归测试。
 
 ## 8. 线程与同步
 
@@ -79,7 +81,10 @@ FlightSize = 已发送但尚未累计确认的数据字节数
 
 固定代码版本，每组只改变一个实验变量，至少选择带宽、时延、丢包率、缓冲区大小或报文长度中的两类。每组重复实验并记录吞吐率、完成时间、重传次数、`rwnd/cwnd/ssthresh` 和原始 trace。使用课程 `test_congestion.py` 或等价命令配置 `tcset`，禁止补造实验数据。
 
+### 10.4 五项挑战
+
+基础 Reno 通过后，依次执行完整 Reno、NewReno、SACK/6675、RACK-TLP 和 CUBIC。完整 Reno 和 NewReno 使用可控重复 ACK 与部分确认场景；SACK/6675 使用一个窗口内多个非连续丢包；RACK-TLP 使用尾部丢包、ACK 延迟和可控重排序；CUBIC 使用无丢包增长、单次丢包和不同 RTT 对照。每项至少重复三次，保存参数、日志、pcap、trace、吞吐率、完成时间、重传次数和与基础 Reno 的差异。
+
 ## 11. 验收标准
 
-第一阶段验收：环境可复现、基线可编译运行、UDP 抓包有效、架构结论可由函数和日志支持、需求表覆盖必做项、设计能映射到后续代码和测试、AI 结论均有人工作证据。第二和第三阶段的功能状态须随开发更新，不提前标记为完成。
-
+第一阶段验收：环境可复现、基线可编译运行、UDP 抓包有效、架构结论可由函数和日志支持、需求表覆盖必做项和五项挑战、设计能映射到后续代码和测试、各项结论均有源码、规范或运行证据。第二、第三阶段及挑战阶段的功能状态须随开发更新，不提前标记为完成。
