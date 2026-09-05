@@ -12,6 +12,6 @@
 
 ## 证据索引
 
-- RFC 章节和课程要求：`report-content.md`、`requirements-traceability.md`。
+- RFC 章节和课程要求：`requirements-traceability.md`。
 - 源码结构与调用关系：`architecture.md`、`design-v1.md`。
 - 构建、运行和网络证据：`baseline-build.log`、`baseline-client.log`、`baseline-server.log`、`network-client.txt`、`network-server.txt`、`baseline.pcap`、`baseline-packets.txt`。
