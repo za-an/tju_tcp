@@ -6,18 +6,8 @@ void onTCPPocket(char* pkt){
     // 当我们收到TCP包时 包中 源IP 源端口 是发送方的 也就是我们眼里的 远程(remote) IP和端口
     uint16_t remote_port = get_src(pkt);
     uint16_t local_port = get_dst(pkt);
-    // remote ip 和 local ip 是读IP 数据包得到的 仿真的话这里直接根据hostname判断
-
-    char hostname[8];
-    gethostname(hostname, 8);
-    uint32_t remote_ip, local_ip;
-    if(strcmp(hostname,"server")==0){ // 自己是服务端 远端就是客户端
-        local_ip = inet_network("172.17.0.6");
-        remote_ip = inet_network("172.17.0.5");
-    }else if(strcmp(hostname,"client")==0){ // 自己是客户端 远端就是服务端 
-        local_ip = inet_network("172.17.0.5");
-        remote_ip = inet_network("172.17.0.6");
-    }
+    uint32_t local_ip = tju_local_ip();
+    uint32_t remote_ip = tju_peer_ip(local_ip);
 
     int hashval;
     // 根据4个ip port 组成四元组 查找有没有已经建立连接的socket
@@ -54,24 +44,17 @@ void sendToLayer3(char* packet_buf, int packet_len){
         return;
     }
 
-    // 获取hostname 根据hostname 判断是客户端还是服务端
-    char hostname[8];
-    gethostname(hostname, 8);
-
     struct sockaddr_in conn;
     conn.sin_family      = AF_INET;            
     conn.sin_port        = htons(20218);
     int rst;
-    if(strcmp(hostname,"server")==0){
-        conn.sin_addr.s_addr = inet_addr("172.17.0.5");
-        rst = sendto(BACKEND_UDPSOCKET_ID, packet_buf, packet_len, 0, (struct sockaddr*)&conn, sizeof(conn));
-    }else if(strcmp(hostname,"client")==0){       
-        conn.sin_addr.s_addr = inet_addr("172.17.0.6");
-        rst = sendto(BACKEND_UDPSOCKET_ID, packet_buf, packet_len, 0, (struct sockaddr*)&conn, sizeof(conn));
-    }else{
-        printf("请不要改动hostname...\n");
-        exit(-1);
+    conn.sin_addr.s_addr = htonl(tju_peer_ip(tju_local_ip()));
+    if (conn.sin_addr.s_addr == 0) {
+        fprintf(stderr, "cannot determine peer IP; set TJU_REMOTE_IP\n");
+        return;
     }
+    rst = sendto(BACKEND_UDPSOCKET_ID, packet_buf, packet_len, 0,
+                 (struct sockaddr*)&conn, sizeof(conn));
 }
 
 /*

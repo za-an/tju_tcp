@@ -58,6 +58,11 @@ char* create_packet_buf(uint16_t src, uint16_t dst, uint32_t seq, uint32_t ack,
     uint16_t hlen, uint16_t plen, uint8_t flags, uint16_t adv_window, 
     uint8_t ext, char* data, int len);
 
+char* create_packet_buf_options(uint16_t src, uint16_t dst, uint32_t seq,
+    uint32_t ack, uint16_t hlen, uint16_t plen, uint8_t flags,
+    uint16_t adv_window, uint8_t ext, const void* options,
+    uint16_t options_len, char* data, int len);
+
 /*
  清除一个tju_packet_t的内存占用
  */
@@ -77,6 +82,8 @@ uint16_t get_plen(char* msg);
 uint8_t get_flags(char* msg);
 uint16_t get_advertised_window(char* msg);
 uint8_t get_ext(char* msg);
+uint8_t packet_checksum8(const char* msg, uint16_t plen);
+int packet_checksum_valid(const char* msg, uint16_t plen);
 
 
 /*############################################## 下面是实现上面函数功能的辅助函数 用户没必要调用 ##############################################*/

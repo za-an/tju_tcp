@@ -14,6 +14,65 @@
 #include <pthread.h>
 #include <sys/select.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include "tju_congestion.h"
+
+/* The teaching VMs use .2/.3 locally; the online grader uses .5/.6. Resolve
+ * the address from the actual 172.17.0.x interface so the same source works
+ * in both environments. TJU_LOCAL_IP/TJU_REMOTE_IP remain available for
+ * unusual runner setups. */
+static inline uint32_t tju_local_ip(void)
+{
+    const char* configured = getenv("TJU_LOCAL_IP");
+    struct ifaddrs* list = NULL;
+    struct ifaddrs* cur;
+    uint32_t result = 0;
+    if (configured != NULL && configured[0] != '\0')
+        return inet_network(configured);
+    if (getifaddrs(&list) == 0) {
+        for (cur = list; cur != NULL; cur = cur->ifa_next) {
+            struct sockaddr_in* address;
+            uint32_t host_address;
+            if (cur->ifa_addr == NULL || cur->ifa_addr->sa_family != AF_INET)
+                continue;
+            address = (struct sockaddr_in*)cur->ifa_addr;
+            host_address = ntohl(address->sin_addr.s_addr);
+            if ((host_address & UINT32_C(0xffffff00)) == UINT32_C(0xac110000)) {
+                /* Keep the same host-order representation as inet_network(),
+                 * which is used by tju_sock_addr and the hash tables. */
+                result = ntohl(address->sin_addr.s_addr);
+                break;
+            }
+        }
+        freeifaddrs(list);
+    }
+    if (result != 0)
+        return result;
+    {
+        char hostname[64] = {0};
+        gethostname(hostname, sizeof(hostname) - 1);
+        return inet_network(strcmp(hostname, "server") == 0
+                                ? "172.17.0.3" : "172.17.0.2");
+    }
+}
+
+static inline uint32_t tju_peer_ip(uint32_t local_ip)
+{
+    const char* configured = getenv("TJU_REMOTE_IP");
+    uint32_t host_address;
+    if (configured != NULL && configured[0] != '\0')
+        return inet_network(configured);
+    /* local_ip is already in the host-order representation returned by
+     * inet_network()/tju_local_ip(). */
+    host_address = local_ip;
+    switch (host_address & 0xffU) {
+    case 2: return inet_network("172.17.0.3");
+    case 3: return inet_network("172.17.0.2");
+    case 5: return inet_network("172.17.0.6");
+    case 6: return inet_network("172.17.0.5");
+    default: return 0;
+    }
+}
 
 #define SIZE32 4
 #define SIZE16 2
@@ -25,9 +84,16 @@
 #define TRUE 1
 #define FALSE 0
 
-/* 课程框架的报文限制，第二阶段沿用原有 1375 字节 MSS。 */
-#define MAX_DLEN 1375
 #define MAX_LEN 1400
+/* v3: 1400-byte packet minus the fixed 20-byte header. Legacy peers can
+   explicitly select -DTJU_SMSS=1375 without changing trace byte units. */
+#ifndef TJU_SMSS
+#define TJU_SMSS 1380
+#endif
+#if TJU_SMSS < 1 || TJU_SMSS > 1380
+#error "TJU_SMSS must fit the 1400-byte packet and 20-byte header"
+#endif
+#define MAX_DLEN TJU_SMSS
 
 #define CLOSED 0
 #define LISTEN 1
@@ -48,9 +114,17 @@
 /* 接收缓存按课程要求预留至少 5000 个满载数据段。 */
 #define TCP_RECVWN_SIZE (5000 * MAX_DLEN)
 
+/* Conservative RFC 5681 defaults; course-specific settings can override these. */
+#ifndef TJU_INITIAL_CWND
+#define TJU_INITIAL_CWND MAX_DLEN
+#endif
+#ifndef TJU_INITIAL_SSTHRESH
+#define TJU_INITIAL_SSTHRESH 65535U
+#endif
+
 /* RFC 6298 定时参数，单位为毫秒。 */
 #define TJU_INITIAL_RTO_MS 1000.0
-#define TJU_MIN_RTO_MS 200.0
+#define TJU_MIN_RTO_MS 1000.0
 #define TJU_MAX_RTO_MS 4000.0
 #define TJU_TIMER_GRANULARITY_MS 10.0
 #define TJU_MSL_MS 1000.0
@@ -83,6 +157,9 @@ typedef struct tju_send_segment {
     double first_sent_ms;
     double last_sent_ms;
     int retransmitted;
+    int rto_retransmitted;
+    int rtt_sampled;
+    int sack_retransmitted;
     struct tju_send_segment* next;
 } tju_send_segment_t;
 
@@ -122,6 +199,20 @@ struct tju_tcp {
     uint32_t irs;
     uint32_t snd_una;
     uint32_t snd_nxt;
+    /* snd_nxt reserves queued sequence space; snd_max advances only on wire. */
+    uint32_t snd_max;
+    uint32_t flight_size;
+    tju_cc_t cc;
+    int cc_enabled;
+    int rack_enabled;
+    int checksum_enabled;
+    int sack_enabled;
+    int tlp_sent;
+    double rack_reordering_ms;
+    uint32_t sack_blocks[4][2];
+    unsigned int sack_block_count;
+    uint32_t sack_rx_blocks[4][2];
+    unsigned int sack_rx_count;
     uint32_t rcv_nxt;
     uint32_t fin_seq;
     uint16_t peer_rwnd;
@@ -145,6 +236,11 @@ struct tju_tcp {
     int timer_started;
     int timer_stop;
     double last_probe_ms;
+    double retransmit_deadline_ms;
+    double persist_deadline_ms;
+    double persist_interval_ms;
+    double last_peer_response_ms;
+    int syn_retransmitted;
     double time_wait_deadline_ms;
 
     int closing_requested;
