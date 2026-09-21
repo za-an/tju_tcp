@@ -6,33 +6,95 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
-#include "global.h"
 #include <pthread.h>
 #include <sys/select.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include "tju_congestion.h"
 
-// 单位是byte
+/* The teaching VMs use .2/.3 locally; the online grader uses .5/.6. Resolve
+ * the address from the actual 172.17.0.x interface so the same source works
+ * in both environments. TJU_LOCAL_IP/TJU_REMOTE_IP remain available for
+ * unusual runner setups. */
+static inline uint32_t tju_local_ip(void)
+{
+    const char* configured = getenv("TJU_LOCAL_IP");
+    struct ifaddrs* list = NULL;
+    struct ifaddrs* cur;
+    uint32_t result = 0;
+    if (configured != NULL && configured[0] != '\0')
+        return inet_network(configured);
+    if (getifaddrs(&list) == 0) {
+        for (cur = list; cur != NULL; cur = cur->ifa_next) {
+            struct sockaddr_in* address;
+            uint32_t host_address;
+            if (cur->ifa_addr == NULL || cur->ifa_addr->sa_family != AF_INET)
+                continue;
+            address = (struct sockaddr_in*)cur->ifa_addr;
+            host_address = ntohl(address->sin_addr.s_addr);
+            if ((host_address & UINT32_C(0xffffff00)) == UINT32_C(0xac110000)) {
+                /* Keep the same host-order representation as inet_network(),
+                 * which is used by tju_sock_addr and the hash tables. */
+                result = ntohl(address->sin_addr.s_addr);
+                break;
+            }
+        }
+        freeifaddrs(list);
+    }
+    if (result != 0)
+        return result;
+    {
+        char hostname[64] = {0};
+        gethostname(hostname, sizeof(hostname) - 1);
+        return inet_network(strcmp(hostname, "server") == 0
+                                ? "172.17.0.3" : "172.17.0.2");
+    }
+}
+
+static inline uint32_t tju_peer_ip(uint32_t local_ip)
+{
+    const char* configured = getenv("TJU_REMOTE_IP");
+    uint32_t host_address;
+    if (configured != NULL && configured[0] != '\0')
+        return inet_network(configured);
+    /* local_ip is already in the host-order representation returned by
+     * inet_network()/tju_local_ip(). */
+    host_address = local_ip;
+    switch (host_address & 0xffU) {
+    case 2: return inet_network("172.17.0.3");
+    case 3: return inet_network("172.17.0.2");
+    case 5: return inet_network("172.17.0.6");
+    case 6: return inet_network("172.17.0.5");
+    default: return 0;
+    }
+}
+
 #define SIZE32 4
 #define SIZE16 2
 #define SIZE8  1
 
-// 一些Flag
 #define NO_FLAG 0
 #define NO_WAIT 1
 #define TIMEOUT 2
 #define TRUE 1
 #define FALSE 0
 
-// 定义最大包长 防止IP层分片
-#define MAX_DLEN 1375 	// 最大包内数据长度
-#define MAX_LEN 1400 	// 最大包长度
+#define MAX_LEN 1400
+/* v3: 1400-byte packet minus the fixed 20-byte header. Legacy peers can
+   explicitly select -DTJU_SMSS=1375 without changing trace byte units. */
+#ifndef TJU_SMSS
+#define TJU_SMSS 1380
+#endif
+#if TJU_SMSS < 1 || TJU_SMSS > 1380
+#error "TJU_SMSS must fit the 1400-byte packet and 20-byte header"
+#endif
+#define MAX_DLEN TJU_SMSS
 
-// TCP socket 状态定义
 #define CLOSED 0
 #define LISTEN 1
 #define SYN_SENT 2
@@ -45,75 +107,151 @@
 #define LAST_ACK 9
 #define TIME_WAIT 10
 
-// TCP 拥塞控制状态
 #define SLOW_START 0
 #define CONGESTION_AVOIDANCE 1
 #define FAST_RECOVERY 2
 
-// TCP 接受窗口大小
-#define TCP_RECVWN_SIZE 32*MAX_DLEN // 比如最多放32个满载数据包
+/* 接收缓存按课程要求预留至少 5000 个满载数据段。 */
+#define TCP_RECVWN_SIZE (5000 * MAX_DLEN)
 
-// TCP 发送窗口
-// 注释的内容如果想用就可以用 不想用就删掉 仅仅提供思路和灵感
+/* Conservative RFC 5681 defaults; course-specific settings can override these. */
+#ifndef TJU_INITIAL_CWND
+#define TJU_INITIAL_CWND MAX_DLEN
+#endif
+#ifndef TJU_INITIAL_SSTHRESH
+#define TJU_INITIAL_SSTHRESH 65535U
+#endif
+
+/* RFC 6298 定时参数，单位为毫秒。 */
+#define TJU_INITIAL_RTO_MS 1000.0
+#define TJU_MIN_RTO_MS 1000.0
+#define TJU_MAX_RTO_MS 4000.0
+#define TJU_TIMER_GRANULARITY_MS 10.0
+#define TJU_MSL_MS 1000.0
+
 typedef struct {
-	uint16_t window_size;
-
-//   uint32_t base;
-//   uint32_t nextseq;
-//   uint32_t estmated_rtt;
-//   int ack_cnt;
-//   pthread_mutex_t ack_cnt_lock;
-//   struct timeval send_time;
-//   struct timeval timeout;
-//   uint16_t rwnd; 
-//   int congestion_status;
-//   uint16_t cwnd; 
-//   uint16_t ssthresh; 
+    uint16_t window_size;
 } sender_window_t;
 
-// TCP 接受窗口
-// 注释的内容如果想用就可以用 不想用就删掉 仅仅提供思路和灵感
 typedef struct {
-	char received[TCP_RECVWN_SIZE];
-
-//   received_packet_t* head;
-//   char buf[TCP_RECVWN_SIZE];
-//   uint8_t marked[TCP_RECVWN_SIZE];
-//   uint32_t expect_seq;
+    char received[TCP_RECVWN_SIZE];
 } receiver_window_t;
 
-// TCP 窗口 每个建立了连接的TCP都包括发送和接受两个窗口
 typedef struct {
-	sender_window_t* wnd_send;
-  	receiver_window_t* wnd_recv;
+    sender_window_t* wnd_send;
+    receiver_window_t* wnd_recv;
 } window_t;
 
 typedef struct {
-	uint32_t ip;
-	uint16_t port;
+    uint32_t ip;
+    uint16_t port;
 } tju_sock_addr;
 
+/* 发送队列中的一个数据段或控制段。 */
+typedef struct tju_send_segment {
+    uint32_t seq;
+    uint32_t seq_len;
+    uint16_t data_len;
+    uint8_t flags;
+    char* data;
+    double first_sent_ms;
+    double last_sent_ms;
+    int retransmitted;
+    int rto_retransmitted;
+    int rtt_sampled;
+    int sack_retransmitted;
+    struct tju_send_segment* next;
+} tju_send_segment_t;
 
-// TJU_TCP 结构体 保存TJU_TCP用到的各种数据
-typedef struct {
-	int state; // TCP的状态
+/* 失序接收队列节点，按序号升序排列。 */
+typedef struct tju_recv_segment {
+    uint32_t seq;
+    uint32_t len;
+    char* data;
+    struct tju_recv_segment* next;
+} tju_recv_segment_t;
 
-	tju_sock_addr bind_addr; // 存放bind和listen时该socket绑定的IP和端口
-	tju_sock_addr established_local_addr; // 存放建立连接后 本机的 IP和端口
-	tju_sock_addr established_remote_addr; // 存放建立连接后 连接对方的 IP和端口
+typedef struct tju_tcp tju_tcp_t;
 
-	pthread_mutex_t send_lock; // 发送数据锁
-	char* sending_buf; // 发送数据缓存区
-	int sending_len; // 发送数据缓存长度
+/* TJU_TCP 内部状态。公共 API 签名保持不变。 */
+struct tju_tcp {
+    int state;
+    tju_sock_addr bind_addr;
+    tju_sock_addr established_local_addr;
+    tju_sock_addr established_remote_addr;
 
-	pthread_mutex_t recv_lock; // 接收数据锁
-	char* received_buf; // 接收数据缓存区
-	int received_len; // 接收数据缓存长度
+    pthread_mutex_t send_lock;
+    char* sending_buf;
+    int sending_len;
+    pthread_mutex_t recv_lock;
+    char* received_buf;
+    int received_len;
+    pthread_cond_t wait_cond;
+    window_t window;
 
-	pthread_cond_t wait_cond; // 可以被用来唤醒recv函数调用时等待的线程
+    /* 状态锁保护连接状态和 accept 完成队列，避免复制 pthread 对象。 */
+    pthread_mutex_t state_lock;
+    pthread_cond_t state_cond;
+    pthread_cond_t accept_cond;
+    pthread_cond_t send_cond;
 
-	window_t window; // 发送和接受窗口
+    uint32_t iss;
+    uint32_t irs;
+    uint32_t snd_una;
+    uint32_t snd_nxt;
+    /* snd_nxt reserves queued sequence space; snd_max advances only on wire. */
+    uint32_t snd_max;
+    uint32_t flight_size;
+    tju_cc_t cc;
+    int cc_enabled;
+    int rack_enabled;
+    int checksum_enabled;
+    int sack_enabled;
+    int tlp_sent;
+    double rack_reordering_ms;
+    uint32_t sack_blocks[4][2];
+    unsigned int sack_block_count;
+    uint32_t sack_rx_blocks[4][2];
+    unsigned int sack_rx_count;
+    uint32_t rcv_nxt;
+    uint32_t fin_seq;
+    uint16_t peer_rwnd;
 
-} tju_tcp_t;
+    tju_send_segment_t* send_head;
+    tju_send_segment_t* send_tail;
+    tju_recv_segment_t* recv_ooo_head;
+    size_t recv_ooo_bytes;
+    size_t recv_capacity;
+    size_t recv_head;
+    size_t recv_tail;
+
+    double srtt_ms;
+    double rttvar_ms;
+    double rto_ms;
+    int rtt_initialized;
+    uint32_t last_ack_seen;
+    int duplicate_ack_count;
+
+    pthread_t timer_thread;
+    int timer_started;
+    int timer_stop;
+    double last_probe_ms;
+    double retransmit_deadline_ms;
+    double persist_deadline_ms;
+    double persist_interval_ms;
+    double last_peer_response_ms;
+    int syn_retransmitted;
+    double time_wait_deadline_ms;
+
+    int closing_requested;
+    int recv_eof;
+    int peer_fin_pending;
+    uint32_t peer_fin_seq;
+
+    tju_tcp_t* parent_listener;
+    tju_tcp_t* accept_head;
+    tju_tcp_t* accept_tail;
+    tju_tcp_t* accept_next;
+};
 
 #endif

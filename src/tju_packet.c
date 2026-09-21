@@ -1,5 +1,24 @@
 #include "tju_packet.h"
 
+uint8_t packet_checksum8(const char* msg, uint16_t plen)
+{
+    uint8_t crc = 0;
+    uint16_t i;
+    for (i = 0; i < plen; ++i) {
+        uint8_t byte = (uint8_t)msg[i];
+        if (i == 19)
+            byte = 0;
+        crc ^= byte;
+        crc = (uint8_t)((crc << 1) | (crc >> 7));
+    }
+    return crc;
+}
+
+int packet_checksum_valid(const char* msg, uint16_t plen)
+{
+    return plen >= DEFAULT_HEADER_LEN && (uint8_t)msg[19] == packet_checksum8(msg, plen);
+}
+
 
 /*
  输入header所有字段 和 TCP包数据内容及其长度
@@ -49,8 +68,28 @@ char* create_packet_buf(uint16_t src, uint16_t dst, uint32_t seq, uint32_t ack,
 
     final = packet_to_buf(temp);
 
+    if (getenv("TJU_CHECKSUM") != NULL)
+        final[19] = (char)packet_checksum8(final, plen);
+
     free_packet(temp);
     return final;
+}
+
+char* create_packet_buf_options(uint16_t src, uint16_t dst, uint32_t seq,
+    uint32_t ack, uint16_t hlen, uint16_t plen, uint8_t flags,
+    uint16_t adv_window, uint8_t ext, const void* options,
+    uint16_t options_len, char* data, int len)
+{
+    char* packet = header_in_char(src, dst, seq, ack, hlen, plen, flags,
+                                  adv_window, ext);
+    if (packet != NULL && options != NULL && options_len > 0)
+        memcpy(packet + DEFAULT_HEADER_LEN, options, options_len);
+    if (packet != NULL && data != NULL && len > 0)
+        memcpy(packet + hlen, data, (size_t)len);
+    if (packet != NULL && getenv("TJU_CHECKSUM") != NULL &&
+        strcmp(getenv("TJU_CHECKSUM"), "0") != 0)
+        packet[19] = (char)packet_checksum8(packet, plen);
+    return packet;
 }
 
 /*

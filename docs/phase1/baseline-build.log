@@ -1,0 +1,7 @@
+﻿rm -f ./build/*.o client server
+rm -f ./build/*.o client server
+gcc -pthread -g -ggdb -DDEBUG -I./inc -c -o build/tju_packet.o src/tju_packet.c
+gcc -pthread -g -ggdb -DDEBUG -I./inc -c -o build/kernel.o src/kernel.c
+gcc -pthread -g -ggdb -DDEBUG -I./inc -c -o build/tju_tcp.o src/tju_tcp.c
+gcc -pthread -g -ggdb -DDEBUG -I./inc ./src/server.c -o server ./build/tju_packet.o ./build/kernel.o ./build/tju_tcp.o 
+gcc -pthread -g -ggdb -DDEBUG -I./inc ./src/client.c -o client ./build/tju_packet.o ./build/kernel.o ./build/tju_tcp.o  

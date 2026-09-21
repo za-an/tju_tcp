@@ -1,0 +1,23 @@
+﻿=== qdisc ===
+qdisc htb 1688: root refcnt 2 r2q 10 default 0x1 direct_packets_stat 0 direct_qlen 1000
+ Sent 2894 bytes 35 pkt (dropped 0, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+qdisc netem 21b8: parent 1688:2 limit 1000 delay 20.0ms
+ Sent 2600 bytes 28 pkt (dropped 0, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+=== ping ===
+PING 172.17.0.2 (172.17.0.2) 56(84) bytes of data.
+64 bytes from 172.17.0.2: icmp_seq=1 ttl=64 time=40.3 ms
+64 bytes from 172.17.0.2: icmp_seq=2 ttl=64 time=109 ms
+64 bytes from 172.17.0.2: icmp_seq=3 ttl=64 time=40.6 ms
+64 bytes from 172.17.0.2: icmp_seq=4 ttl=64 time=40.7 ms
+64 bytes from 172.17.0.2: icmp_seq=5 ttl=64 time=40.7 ms
+64 bytes from 172.17.0.2: icmp_seq=6 ttl=64 time=41.2 ms
+64 bytes from 172.17.0.2: icmp_seq=7 ttl=64 time=46.3 ms
+64 bytes from 172.17.0.2: icmp_seq=8 ttl=64 time=40.7 ms
+64 bytes from 172.17.0.2: icmp_seq=9 ttl=64 time=40.6 ms
+64 bytes from 172.17.0.2: icmp_seq=10 ttl=64 time=104 ms
+
+--- 172.17.0.2 ping statistics ---
+10 packets transmitted, 10 received, 0% packet loss, time 9009ms
+rtt min/avg/max/mdev = 40.324/54.402/108.899/26.086 ms
